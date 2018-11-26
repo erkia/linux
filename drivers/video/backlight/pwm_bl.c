@@ -29,6 +29,8 @@ struct pwm_bl_data {
 	struct pwm_device	*pwm;
 	struct device		*dev;
 	unsigned int		period;
+	unsigned int		duty_cycle;
+	unsigned int		target_duty_cycle;
 	unsigned int		lth_brightness;
 	unsigned int		*levels;
 	bool			enabled;
@@ -44,9 +46,10 @@ struct pwm_bl_data {
 					int brightness);
 	int			(*check_fb)(struct device *, struct fb_info *);
 	void			(*exit)(struct device *);
+	struct work_struct 	dim;
 };
 
-static void pwm_backlight_power_on(struct pwm_bl_data *pb, int brightness)
+static void pwm_backlight_power_on(struct pwm_bl_data *pb)
 {
 	int err;
 
@@ -86,6 +89,48 @@ static void pwm_backlight_power_off(struct pwm_bl_data *pb)
 	pb->enabled = false;
 }
 
+static void handle_dim (struct work_struct *work)
+{
+	struct pwm_bl_data *pb = container_of(work, struct pwm_bl_data, dim);
+	unsigned int target_duty_cycle;
+	unsigned int step;
+
+	// printk (KERN_INFO "handle_dim: %d => %d\n", pb->duty_cycle, pb->target_duty_cycle);
+
+	while (1) {
+
+		target_duty_cycle = pb->target_duty_cycle;
+		step = 2;
+		if (pb->duty_cycle > 200) {
+			step += 100 * int_sqrt(pb->duty_cycle - 200) / int_sqrt(pb->period - 200);
+		}
+
+		if ((target_duty_cycle > pb->duty_cycle) && ((target_duty_cycle - pb->duty_cycle) > step)) {
+			pb->duty_cycle += step;
+		} else if ((pb->duty_cycle > target_duty_cycle) && ((pb->duty_cycle - target_duty_cycle) > step)) {
+			pb->duty_cycle -= step;
+		} else {
+			pb->duty_cycle = target_duty_cycle;
+		}
+
+		if (pb->duty_cycle > 0) {
+			pwm_config(pb->pwm, pb->duty_cycle, pb->period);
+			pwm_backlight_power_on(pb);
+		} else {
+			pwm_backlight_power_off(pb);
+		}
+
+		if (pb->duty_cycle == target_duty_cycle) {
+			break;
+		}
+
+		usleep_range (10000, 12000);
+
+	}
+
+	// printk (KERN_INFO "handle_dim done: %d == %d\n", pb->duty_cycle, pb->target_duty_cycle);
+}
+
 static int compute_duty_cycle(struct pwm_bl_data *pb, int brightness)
 {
 	unsigned int lth = pb->lth_brightness;
@@ -106,7 +151,6 @@ static int pwm_backlight_update_status(struct backlight_device *bl)
 {
 	struct pwm_bl_data *pb = bl_get_data(bl);
 	int brightness = bl->props.brightness;
-	int duty_cycle;
 
 	if (bl->props.power != FB_BLANK_UNBLANK ||
 	    bl->props.fb_blank != FB_BLANK_UNBLANK ||
@@ -116,12 +160,9 @@ static int pwm_backlight_update_status(struct backlight_device *bl)
 	if (pb->notify)
 		brightness = pb->notify(pb->dev, brightness);
 
-	if (brightness > 0) {
-		duty_cycle = compute_duty_cycle(pb, brightness);
-		pwm_config(pb->pwm, duty_cycle, pb->period);
-		pwm_backlight_power_on(pb, brightness);
-	} else
-		pwm_backlight_power_off(pb);
+	pb->target_duty_cycle = compute_duty_cycle(pb, brightness);
+
+	schedule_work(&pb->dim);
 
 	if (pb->notify_after)
 		pb->notify_after(pb->dev, brightness);
@@ -568,6 +609,8 @@ static int pwm_backlight_probe(struct platform_device *pdev)
 		pb->period = data->pwm_period_ns;
 
 	pb->lth_brightness = data->lth_brightness * (pb->period / pb->scale);
+
+	INIT_WORK(&pb->dim, handle_dim);
 
 	memset(&props, 0, sizeof(struct backlight_properties));
 	props.type = BACKLIGHT_RAW;
