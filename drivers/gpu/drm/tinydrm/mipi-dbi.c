@@ -913,6 +913,8 @@ int mipi_dbi_spi_init(struct spi_device *spi, struct mipi_dbi *mipi,
 	if (tx_size < 16) {
 		DRM_ERROR("SPI transmit buffer too small: %zu\n", tx_size);
 		return -EINVAL;
+	} else if (tx_size > 8192) {
+		tx_size = 8192;
 	}
 
 	/*

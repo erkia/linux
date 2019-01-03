@@ -40,6 +40,14 @@ config TINYDRM_MI0283QT
 	  DRM driver for the Multi-Inno MI0283QT display panel
 	  If M is selected the module will be called mi0283qt.
 
+config TINYDRM_MI0283AAT
+	tristate "DRM support for MI0283AAT"
+	depends on DRM_TINYDRM && SPI
+	select TINYDRM_MIPI_DBI
+	help
+	  DRM driver for the Multi-Inno MI0283AAT display panel
+	  If M is selected the module will be called mi0283aat.
+
 config TINYDRM_REPAPER
 	tristate "DRM support for Pervasive Displays RePaper panels (V231)"
 	depends on DRM_TINYDRM && SPI
