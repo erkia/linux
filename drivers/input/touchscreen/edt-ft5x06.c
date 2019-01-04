@@ -108,6 +108,7 @@ struct edt_ft5x06_ts_data {
 	int offset;
 	int report_rate;
 	int max_support_points;
+	bool set_hid_to_std;
 
 	char name[EDT_NAME_LEN];
 
@@ -117,6 +118,7 @@ struct edt_ft5x06_ts_data {
 
 struct edt_i2c_chip_data {
 	int  max_support_points;
+	bool set_hid_to_std;
 };
 
 static int edt_ft5x06_ts_readwrite(struct i2c_client *client,
@@ -146,6 +148,40 @@ static int edt_ft5x06_ts_readwrite(struct i2c_client *client,
 	if (ret < 0)
 		return ret;
 	if (ret != i)
+		return -EIO;
+
+	return 0;
+}
+
+
+static int edt_ft5x06_hid_to_std(struct i2c_client *client)
+{
+	struct i2c_msg msg;
+	int ret;
+	u8 buf[3] = {0xEB, 0xAA, 0x09};
+
+	msg.addr  = client->addr;
+	msg.flags = 0;
+	msg.len = sizeof (buf);
+	msg.buf = buf;
+
+	ret = i2c_transfer(client->adapter, &msg, 1);
+	if (ret < 0)
+		return ret;
+	if (ret != 1)
+		return -EIO;
+
+	msleep (10);
+
+	msg.addr  = client->addr;
+	msg.flags = I2C_M_RD;
+	msg.len = sizeof (buf);
+	msg.buf = buf;
+
+	ret = i2c_transfer(client->adapter, &msg, 1);
+	if (ret < 0)
+		return ret;
+	if (ret != 1)
 		return -EIO;
 
 	return 0;
@@ -779,6 +815,12 @@ static int edt_ft5x06_ts_identify(struct i2c_client *client,
 	int error;
 	char *model_name = tsdata->name;
 
+	if (tsdata->set_hid_to_std) {
+		error = edt_ft5x06_hid_to_std(client);
+		if (error)
+			return error;
+	}
+
 	/* see what we find if we assume it is a M06 *
 	 * if we get less than EDT_NAME_LEN, we don't want
 	 * to have garbage in there
@@ -991,6 +1033,7 @@ static int edt_ft5x06_ts_probe(struct i2c_client *client,
 	}
 
 	tsdata->max_support_points = chip_data->max_support_points;
+	tsdata->set_hid_to_std = chip_data->set_hid_to_std;
 
 	tsdata->reset_gpio = devm_gpiod_get_optional(&client->dev,
 						     "reset", GPIOD_OUT_HIGH);
@@ -1149,14 +1192,22 @@ static SIMPLE_DEV_PM_OPS(edt_ft5x06_ts_pm_ops,
 
 static const struct edt_i2c_chip_data edt_ft5x06_data = {
 	.max_support_points = 5,
+	.set_hid_to_std     = false
 };
 
 static const struct edt_i2c_chip_data edt_ft5506_data = {
 	.max_support_points = 10,
+	.set_hid_to_std     = false
+};
+
+static const struct edt_i2c_chip_data edt_ft5x46_data = {
+	.max_support_points = 10,
+	.set_hid_to_std     = true
 };
 
 static const struct edt_i2c_chip_data edt_ft6236_data = {
 	.max_support_points = 2,
+	.set_hid_to_std     = false
 };
 
 static const struct i2c_device_id edt_ft5x06_ts_id[] = {
@@ -1174,6 +1225,7 @@ static const struct of_device_id edt_ft5x06_of_match[] = {
 	{ .compatible = "edt,edt-ft5306", .data = &edt_ft5x06_data },
 	{ .compatible = "edt,edt-ft5406", .data = &edt_ft5x06_data },
 	{ .compatible = "edt,edt-ft5506", .data = &edt_ft5506_data },
+	{ .compatible = "edt,edt-ft5x46", .data = &edt_ft5x46_data },
 	/* Note focaltech vendor prefix for compatibility with ft6236.c */
 	{ .compatible = "focaltech,ft6236", .data = &edt_ft6236_data },
 	{ /* sentinel */ }
