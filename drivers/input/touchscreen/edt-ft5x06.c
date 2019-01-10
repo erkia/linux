@@ -173,6 +173,7 @@ static int edt_ft5x06_hid_to_std(struct i2c_client *client)
 
 	msleep (10);
 
+	memset (buf, 0, sizeof (buf));
 	msg.addr  = client->addr;
 	msg.flags = I2C_M_RD;
 	msg.len = sizeof (buf);
@@ -183,6 +184,16 @@ static int edt_ft5x06_hid_to_std(struct i2c_client *client)
 		return ret;
 	if (ret != 1)
 		return -EIO;
+
+	dev_dbg(&client->dev, "hid_to_std value: reg1 = 0x%02X, reg2 = 0x%02X, reg3 = 0x%02X\n", buf[0], buf[1], buf[2]);
+
+	if (buf[0] == 0xEB && buf[1] == 0xAA && buf[2] == 0x08) {
+		dev_info(&client->dev, "I2C-HID to I2C-STD succeeded\n");
+		return 0;
+	} else {
+		dev_err(&client->dev, "I2C-HID to I2C-STD failed\n");
+		return -ENODEV;
+	}
 
 	return 0;
 }
@@ -908,6 +919,11 @@ static int edt_ft5x06_ts_identify(struct i2c_client *client,
 			break;
 		case 0x5a:   /* Solomon Goldentek Display */
 			snprintf(model_name, EDT_NAME_LEN, "GKTW50SCED1R0");
+			break;
+		case 0x79:
+			snprintf(model_name, EDT_NAME_LEN,
+				 "generic ft5x46 (%02x)",
+				 rdbuf[0]);
 			break;
 		default:
 			snprintf(model_name, EDT_NAME_LEN,
