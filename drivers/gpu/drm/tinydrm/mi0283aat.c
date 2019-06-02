@@ -1,5 +1,5 @@
 /*
- * DRM driver for Multi-Inno mi0283aat panels
+ * DRM driver for Multi-Inno MI0283AAT panels
  *
  * Copyright 2016 Noralf Trønnes
  *
@@ -9,44 +9,35 @@
  * (at your option) any later version.
  */
 
-#include <drm/tinydrm/st7789v.h>
-#include <drm/tinydrm/mipi-dbi.h>
-#include <drm/tinydrm/tinydrm-helpers.h>
+#include <linux/backlight.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
 #include <linux/module.h>
 #include <linux/property.h>
 #include <linux/regulator/consumer.h>
 #include <linux/spi/spi.h>
+
+#include <drm/drm_fb_helper.h>
+#include <drm/drm_modeset_helper.h>
+#include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/tinydrm/st7789v.h>
+#include <drm/tinydrm/mipi-dbi.h>
+#include <drm/tinydrm/tinydrm-helpers.h>
 #include <video/mipi_display.h>
 
-static int mi0283aat_init(struct mipi_dbi *mipi)
+static void mi0283aat_enable(struct drm_simple_display_pipe *pipe,
+			    struct drm_crtc_state *crtc_state,
+			    struct drm_plane_state *plane_state)
 {
-	struct tinydrm_device *tdev = &mipi->tinydrm;
-	struct device *dev = tdev->drm->dev;
+	struct tinydrm_device *tdev = pipe_to_tinydrm(pipe);
+	struct mipi_dbi *mipi = mipi_dbi_from_tinydrm(tdev);
 	int ret;
 
 	DRM_DEBUG_KMS("\n");
 
-	ret = regulator_enable(mipi->regulator);
-	if (ret) {
-		DRM_DEV_ERROR(dev, "Failed to enable regulator %d\n", ret);
-		return ret;
-	}
-
-	// Avoid flicker by skipping setup if the bootloader has done it
-	if (mipi_dbi_display_is_on(mipi))
-		return 0;
-
-	mipi_dbi_hw_reset(mipi);
-	ret = mipi_dbi_command(mipi, MIPI_DCS_SOFT_RESET);
-	if (ret) {
-		DRM_DEV_ERROR(dev, "Error sending command %d\n", ret);
-		regulator_disable(mipi->regulator);
-		return ret;
-	}
-
-	msleep(20);
+	ret = mipi_dbi_poweron_conditional_reset(mipi);
+	if (ret < 0)
+		return;
 
 	//------------------------------------LCD SETTING-------------------------------------//
 	mipi_dbi_command(mipi, MIPI_DCS_SET_PIXEL_FORMAT, MIPI_DCS_PIXEL_FMT_16BIT);
@@ -81,22 +72,16 @@ static int mi0283aat_init(struct mipi_dbi *mipi)
 
 	mipi_dbi_command(mipi, MIPI_DCS_SET_DISPLAY_ON);
 
-	return 0;
-}
+	mipi_dbi_enable_flush(mipi, crtc_state, plane_state);
 
-static void mi0283aat_fini(void *data)
-{
-	struct mipi_dbi *mipi = data;
-
-	DRM_DEBUG_KMS("\n");
-	regulator_disable(mipi->regulator);
+	return;
 }
 
 static const struct drm_simple_display_pipe_funcs mi0283aat_pipe_funcs = {
-	.enable = mipi_dbi_pipe_enable,
+	.enable = mi0283aat_enable,
 	.disable = mipi_dbi_pipe_disable,
 	.update = tinydrm_display_pipe_update,
-	.prepare_fb = tinydrm_display_pipe_prepare_fb,
+	.prepare_fb = drm_gem_fb_simple_display_pipe_prepare_fb,
 };
 
 static const struct drm_display_mode mi0283aat_mode = {
@@ -110,11 +95,10 @@ static struct drm_driver mi0283aat_driver = {
 				  DRIVER_ATOMIC,
 	.fops			= &mi0283aat_fops,
 	TINYDRM_GEM_DRIVER_OPS,
-	.lastclose		= tinydrm_lastclose,
 	.debugfs_init		= mipi_dbi_debugfs_init,
 	.name			= "mi0283aat",
-	.desc			= "Multi-Inno mi0283aat",
-	.date			= "20190103",
+	.desc			= "Multi-Inno MI0283AAT",
+	.date			= "20190602",
 	.major			= 1,
 	.minor			= 0,
 };
@@ -159,7 +143,7 @@ static int mi0283aat_probe(struct spi_device *spi)
 	if (IS_ERR(mipi->regulator))
 		return PTR_ERR(mipi->regulator);
 
-	mipi->backlight = tinydrm_of_find_backlight(dev);
+	mipi->backlight = devm_of_find_backlight(dev);
 	if (IS_ERR(mipi->backlight))
 		return PTR_ERR(mipi->backlight);
 
@@ -173,17 +157,6 @@ static int mi0283aat_probe(struct spi_device *spi)
 			    &mi0283aat_driver, &mi0283aat_mode, rotation);
 	if (ret)
 		return ret;
-
-	ret = mi0283aat_init(mipi);
-	if (ret)
-		return ret;
-
-	/* use devres to fini after drm unregister (drv->remove is before) */
-	ret = devm_add_action(dev, mi0283aat_fini, mipi);
-	if (ret) {
-		mi0283aat_fini(mipi);
-		return ret;
-	}
 
 	spi_set_drvdata(spi, mipi);
 
@@ -200,27 +173,17 @@ static void mi0283aat_shutdown(struct spi_device *spi)
 static int __maybe_unused mi0283aat_pm_suspend(struct device *dev)
 {
 	struct mipi_dbi *mipi = dev_get_drvdata(dev);
-	int ret;
 
-	ret = tinydrm_suspend(&mipi->tinydrm);
-	if (ret)
-		return ret;
-
-	mi0283aat_fini(mipi);
-
-	return 0;
+	return drm_mode_config_helper_suspend(mipi->tinydrm.drm);
 }
 
 static int __maybe_unused mi0283aat_pm_resume(struct device *dev)
 {
 	struct mipi_dbi *mipi = dev_get_drvdata(dev);
-	int ret;
 
-	ret = mi0283aat_init(mipi);
-	if (ret)
-		return ret;
+	drm_mode_config_helper_resume(mipi->tinydrm.drm);
 
-	return tinydrm_resume(&mipi->tinydrm);
+	return 0;
 }
 
 static const struct dev_pm_ops mi0283aat_pm_ops = {
@@ -240,6 +203,6 @@ static struct spi_driver mi0283aat_spi_driver = {
 };
 module_spi_driver(mi0283aat_spi_driver);
 
-MODULE_DESCRIPTION("Multi-Inno mi0283aat DRM driver");
+MODULE_DESCRIPTION("Multi-Inno MI0283AAT DRM driver");
 MODULE_AUTHOR("Noralf Trønnes");
 MODULE_LICENSE("GPL");
