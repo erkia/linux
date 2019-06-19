@@ -38,6 +38,8 @@ static void mi0283aat_enable(struct drm_simple_display_pipe *pipe,
 	ret = mipi_dbi_poweron_conditional_reset(mipi);
 	if (ret < 0)
 		return;
+	if (ret == 1)
+		goto out_enable;
 
 	//------------------------------------LCD SETTING-------------------------------------//
 	mipi_dbi_command(mipi, MIPI_DCS_SET_PIXEL_FORMAT, MIPI_DCS_PIXEL_FMT_16BIT);
@@ -72,9 +74,8 @@ static void mi0283aat_enable(struct drm_simple_display_pipe *pipe,
 
 	mipi_dbi_command(mipi, MIPI_DCS_SET_DISPLAY_ON);
 
+out_enable:
 	mipi_dbi_enable_flush(mipi, crtc_state, plane_state);
-
-	return;
 }
 
 static const struct drm_simple_display_pipe_funcs mi0283aat_pipe_funcs = {
