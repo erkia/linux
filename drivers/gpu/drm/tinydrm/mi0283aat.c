@@ -25,6 +25,13 @@
 #include <drm/tinydrm/tinydrm-helpers.h>
 #include <video/mipi_display.h>
 
+typedef struct mi0283aat_config {
+	u32 lutb;
+} mi0283aat_config_t;
+
+#define MI0283AAT_CONFIG 0x1C
+#define DRM_IOCTL_MI0283AAT_CONFIG DRM_IOW(DRM_COMMAND_BASE + MI0283AAT_CONFIG, struct mi0283aat_config)
+
 static void mi0283aat_enable(struct drm_simple_display_pipe *pipe,
 			    struct drm_crtc_state *crtc_state,
 			    struct drm_plane_state *plane_state)
@@ -67,6 +74,7 @@ static void mi0283aat_enable(struct drm_simple_display_pipe *pipe,
 	mipi_dbi_command(mipi, ST7789V_NVGAMCTRL, 0xD0, 0x05, 0x09, 0x08, 0x03, 0x24, 0x32,
 											  0x32, 0x3B, 0x38, 0x14, 0x13, 0x28, 0x2F);
 
+	mipi_dbi_command(mipi, ST7789V_DGMEN, 0x04);
 	mipi_dbi_command(mipi, MIPI_DCS_ENTER_INVERT_MODE);
 
 	mipi_dbi_command(mipi, MIPI_DCS_EXIT_SLEEP_MODE);
@@ -77,6 +85,34 @@ static void mi0283aat_enable(struct drm_simple_display_pipe *pipe,
 out_enable:
 	mipi_dbi_enable_flush(mipi, crtc_state, plane_state);
 }
+
+
+static int mi0283aat_config_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
+{
+	struct tinydrm_device *tdev = dev->dev_private;
+	struct mipi_dbi *mipi = mipi_dbi_from_tinydrm(tdev);
+	mi0283aat_config_t *val = data;
+
+	if (val->lutb < 0) {
+		val->lutb = 0;
+	} else if (val->lutb > 100) {
+		val->lutb = 100;
+	}
+
+	mipi_dbi_command(mipi, ST7789V_DGMLUTB,
+		0x00 * val->lutb / 100, 0x04 * val->lutb / 100, 0x08 * val->lutb / 100, 0x0C * val->lutb / 100, 0x10 * val->lutb / 100, 0x14 * val->lutb / 100, 0x18 * val->lutb / 100, 0x1C * val->lutb / 100,
+		0x20 * val->lutb / 100, 0x24 * val->lutb / 100, 0x28 * val->lutb / 100, 0x2C * val->lutb / 100, 0x30 * val->lutb / 100, 0x34 * val->lutb / 100, 0x38 * val->lutb / 100, 0x3C * val->lutb / 100,
+		0x40 * val->lutb / 100, 0x44 * val->lutb / 100, 0x48 * val->lutb / 100, 0x4C * val->lutb / 100, 0x50 * val->lutb / 100, 0x54 * val->lutb / 100, 0x58 * val->lutb / 100, 0x5C * val->lutb / 100,
+		0x60 * val->lutb / 100, 0x64 * val->lutb / 100, 0x68 * val->lutb / 100, 0x6C * val->lutb / 100, 0x70 * val->lutb / 100, 0x74 * val->lutb / 100, 0x78 * val->lutb / 100, 0x7C * val->lutb / 100,
+		0x80 * val->lutb / 100, 0x84 * val->lutb / 100, 0x88 * val->lutb / 100, 0x8C * val->lutb / 100, 0x90 * val->lutb / 100, 0x94 * val->lutb / 100, 0x98 * val->lutb / 100, 0x9C * val->lutb / 100,
+		0xA0 * val->lutb / 100, 0xA4 * val->lutb / 100, 0xA8 * val->lutb / 100, 0xAC * val->lutb / 100, 0xB0 * val->lutb / 100, 0xB4 * val->lutb / 100, 0xB8 * val->lutb / 100, 0xBC * val->lutb / 100,
+		0xC0 * val->lutb / 100, 0xC4 * val->lutb / 100, 0xC8 * val->lutb / 100, 0xCC * val->lutb / 100, 0xD0 * val->lutb / 100, 0xD4 * val->lutb / 100, 0xD8 * val->lutb / 100, 0xDC * val->lutb / 100,
+		0xE0 * val->lutb / 100, 0xE4 * val->lutb / 100, 0xE8 * val->lutb / 100, 0xEC * val->lutb / 100, 0xF0 * val->lutb / 100, 0xF4 * val->lutb / 100, 0xF8 * val->lutb / 100, 0xFC * val->lutb / 100,
+	);
+
+	return 0;
+}
+
 
 static const struct drm_simple_display_pipe_funcs mi0283aat_pipe_funcs = {
 	.enable = mi0283aat_enable,
@@ -89,6 +125,10 @@ static const struct drm_display_mode mi0283aat_mode = {
 	TINYDRM_MODE(320, 240, 58, 43),
 };
 
+static const struct drm_ioctl_desc mi0283aat_ioctls[] = {
+	DRM_IOCTL_DEF_DRV(MI0283AAT_CONFIG, mi0283aat_config_ioctl, DRM_AUTH),
+};
+
 DEFINE_DRM_GEM_CMA_FOPS(mi0283aat_fops);
 
 static struct drm_driver mi0283aat_driver = {
@@ -97,6 +137,8 @@ static struct drm_driver mi0283aat_driver = {
 	.fops			= &mi0283aat_fops,
 	TINYDRM_GEM_DRIVER_OPS,
 	.debugfs_init		= mipi_dbi_debugfs_init,
+	.ioctls			= mi0283aat_ioctls,
+	.num_ioctls		= sizeof(mi0283aat_ioctls) / sizeof(mi0283aat_ioctls[0]),
 	.name			= "mi0283aat",
 	.desc			= "Multi-Inno MI0283AAT",
 	.date			= "20190602",
