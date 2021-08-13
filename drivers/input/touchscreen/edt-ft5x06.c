@@ -139,6 +139,7 @@ struct edt_ft5x06_ts_data {
 	u8 tdata_cmd;
 	int tdata_len;
 	int tdata_offset;
+	bool set_hid_to_std;
 
 	char name[EDT_NAME_LEN];
 	char fw_version[EDT_NAME_LEN];
@@ -151,12 +152,50 @@ struct edt_ft5x06_ts_data {
 
 struct edt_i2c_chip_data {
 	int  max_support_points;
+	bool set_hid_to_std;
 };
 
 static const struct regmap_config edt_ft5x06_i2c_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
 };
+
+static int edt_ft5x06_ts_identify(struct i2c_client *client, struct edt_ft5x06_ts_data *tsdata);
+static void edt_ft5x06_ts_get_defaults(struct device *dev, struct edt_ft5x06_ts_data *tsdata);
+static void edt_ft5x06_ts_set_regs(struct edt_ft5x06_ts_data *tsdata);
+static void edt_ft5x06_ts_get_parameters(struct edt_ft5x06_ts_data *tsdata);
+
+static int edt_ft5x06_ts_readwrite(struct i2c_client *client,
+				   u16 wr_len, u8 *wr_buf,
+				   u16 rd_len, u8 *rd_buf)
+{
+	struct i2c_msg wrmsg[2];
+	int i = 0;
+	int ret;
+
+	if (wr_len) {
+		wrmsg[i].addr  = client->addr;
+		wrmsg[i].flags = 0;
+		wrmsg[i].len = wr_len;
+		wrmsg[i].buf = wr_buf;
+		i++;
+	}
+	if (rd_len) {
+		wrmsg[i].addr  = client->addr;
+		wrmsg[i].flags = I2C_M_RD;
+		wrmsg[i].len = rd_len;
+		wrmsg[i].buf = rd_buf;
+		i++;
+	}
+
+	ret = i2c_transfer(client->adapter, wrmsg, i);
+	if (ret < 0)
+		return ret;
+	if (ret != i)
+		return -EIO;
+
+	return 0;
+}
 
 static bool edt_ft5x06_ts_check_crc(struct edt_ft5x06_ts_data *tsdata,
 				    u8 *buf, int buflen)
@@ -818,6 +857,95 @@ static const struct file_operations debugfs_raw_data_fops = {
 	.read = edt_ft5x06_debugfs_raw_data_read,
 };
 
+static int edt_ft5x06_debugfs_reset_get(void *data, u64 *reset)
+{
+	*reset = 0;
+	return 0;
+};
+
+static int edt_ft5x06_debugfs_reset_set(void *data, u64 reset)
+{
+	struct edt_ft5x06_ts_data *tsdata = data;
+	u8 buf[2] = { 0xfc, 0x00 };
+	int error;
+
+	if (reset != 1) {
+		return -ERANGE;
+	}
+
+	dev_warn(&tsdata->client->dev, "triggering touchscreen reset\n");
+
+	mutex_lock(&tsdata->mutex);
+
+	if (tsdata->reset_gpio) {
+		gpiod_set_value_cansleep(tsdata->reset_gpio, 1);
+		usleep_range(5000, 6000);
+		gpiod_set_value_cansleep(tsdata->reset_gpio, 0);
+		msleep(300);
+	}
+
+	tsdata->factory_mode = false;
+
+	error = edt_ft5x06_ts_identify(tsdata->client, tsdata);
+	if (error) {
+		dev_err(&tsdata->client->dev, "touchscreen probe failed\n");
+		goto done;
+	}
+
+	/*
+	 * Dummy read access. EP0700MLP1 returns bogus data on the first
+	 * register read access and ignores writes.
+	 */
+	edt_ft5x06_ts_readwrite(tsdata->client, 2, buf, 2, buf);
+
+	edt_ft5x06_ts_set_regs(tsdata);
+	edt_ft5x06_ts_get_defaults(&tsdata->client->dev, tsdata);
+	edt_ft5x06_ts_get_parameters(tsdata);
+
+done:
+
+	mutex_unlock(&tsdata->mutex);
+
+	dev_info(&tsdata->client->dev, "touchscreen reset finished\n");
+
+	return 0;
+};
+
+DEFINE_SIMPLE_ATTRIBUTE(debugfs_reset_fops, edt_ft5x06_debugfs_reset_get, edt_ft5x06_debugfs_reset_set, "%llu\n");
+
+static int edt_ft5x06_debugfs_auto_calib_get(void *data, u64 *retval)
+{
+	struct edt_ft5x06_ts_data *tsdata = data;
+	int val;
+	int error;
+
+	error = regmap_read(tsdata->regmap, 0xA0, &val);
+	if (error == 0) {
+		*retval = val;
+	} else {
+		dev_err(&tsdata->client->dev, "failed to read auto-calibration, error %d\n", error);
+		*retval = 0;
+	}
+
+	return error;
+}
+
+static int edt_ft5x06_debugfs_auto_calib_set(void *data, u64 val)
+{
+	struct edt_ft5x06_ts_data *tsdata = data;
+	int error;
+
+	error = regmap_write(tsdata->regmap, 0xA0, val);
+	if (error) {
+		dev_err(&tsdata->client->dev, "failed write auto-calibration, error %d\n", error);
+		return error;
+	}
+
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(debugfs_auto_calib_fops, edt_ft5x06_debugfs_auto_calib_get, edt_ft5x06_debugfs_auto_calib_set, "%llu\n");
+
 static void edt_ft5x06_ts_prepare_debugfs(struct edt_ft5x06_ts_data *tsdata,
 					  const char *debugfs_name)
 {
@@ -830,6 +958,10 @@ static void edt_ft5x06_ts_prepare_debugfs(struct edt_ft5x06_ts_data *tsdata,
 			    tsdata->debug_dir, tsdata, &debugfs_mode_fops);
 	debugfs_create_file("raw_data", S_IRUSR,
 			    tsdata->debug_dir, tsdata, &debugfs_raw_data_fops);
+	debugfs_create_file("reset", S_IWUSR,
+			    tsdata->debug_dir, tsdata, &debugfs_reset_fops);
+	debugfs_create_file("auto_calib", S_IRUSR | S_IWUSR,
+			    tsdata->debug_dir, tsdata, &debugfs_auto_calib_fops);
 }
 
 static void edt_ft5x06_ts_teardown_debugfs(struct edt_ft5x06_ts_data *tsdata)
@@ -856,6 +988,50 @@ static void edt_ft5x06_ts_teardown_debugfs(struct edt_ft5x06_ts_data *tsdata)
 
 #endif /* CONFIG_DEBUGFS */
 
+static int edt_ft5x06_hid_to_std(struct i2c_client *client)
+{
+	struct i2c_msg msg;
+	int ret;
+	u8 buf[3] = {0xEB, 0xAA, 0x09};
+
+	msg.addr  = client->addr;
+	msg.flags = 0;
+	msg.len = sizeof (buf);
+	msg.buf = buf;
+
+	ret = i2c_transfer(client->adapter, &msg, 1);
+	if (ret < 0)
+		return ret;
+	if (ret != 1)
+		return -EIO;
+
+	msleep (10);
+
+	memset (buf, 0, sizeof (buf));
+	msg.addr  = client->addr;
+	msg.flags = I2C_M_RD;
+	msg.len = sizeof (buf);
+	msg.buf = buf;
+
+	ret = i2c_transfer(client->adapter, &msg, 1);
+	if (ret < 0)
+		return ret;
+	if (ret != 1)
+		return -EIO;
+
+	dev_dbg(&client->dev, "hid_to_std value: reg1 = 0x%02X, reg2 = 0x%02X, reg3 = 0x%02X\n", buf[0], buf[1], buf[2]);
+
+	if (buf[0] == 0xEB && buf[1] == 0xAA && buf[2] == 0x08) {
+		dev_info(&client->dev, "I2C-HID to I2C-STD succeeded\n");
+		return 0;
+	} else {
+		dev_err(&client->dev, "I2C-HID to I2C-STD failed\n");
+		return -ENODEV;
+	}
+
+	return 0;
+}
+
 static int edt_ft5x06_ts_identify(struct i2c_client *client,
 				  struct edt_ft5x06_ts_data *tsdata)
 {
@@ -864,6 +1040,13 @@ static int edt_ft5x06_ts_identify(struct i2c_client *client,
 	int error;
 	char *model_name = tsdata->name;
 	char *fw_version = tsdata->fw_version;
+
+	if (tsdata->set_hid_to_std) {
+		error = edt_ft5x06_hid_to_std(client);
+		if (error) {
+			return error;
+		}
+	}
 
 	/* see what we find if we assume it is a M06 *
 	 * if we get less than EDT_NAME_LEN, we don't want
@@ -967,6 +1150,11 @@ static int edt_ft5x06_ts_identify(struct i2c_client *client,
 			strscpy(fw_version, rdbuf, 1);
 			snprintf(model_name, EDT_NAME_LEN,
 				 "EVERVISION-FT5726NEi");
+			break;
+		case 0x79:
+			snprintf(model_name, EDT_NAME_LEN,
+				 "generic ft5x46 (%02x)",
+				 rdbuf[0]);
 			break;
 		default:
 			snprintf(model_name, EDT_NAME_LEN,
@@ -1166,6 +1354,7 @@ static int edt_ft5x06_ts_probe(struct i2c_client *client)
 	}
 
 	tsdata->max_support_points = chip_data->max_support_points;
+	tsdata->set_hid_to_std = chip_data->set_hid_to_std;
 
 	tsdata->vcc = devm_regulator_get(&client->dev, "vcc");
 	if (IS_ERR(tsdata->vcc))
@@ -1467,14 +1656,22 @@ static DEFINE_SIMPLE_DEV_PM_OPS(edt_ft5x06_ts_pm_ops,
 
 static const struct edt_i2c_chip_data edt_ft5x06_data = {
 	.max_support_points = 5,
+	.set_hid_to_std     = false
 };
 
 static const struct edt_i2c_chip_data edt_ft5506_data = {
 	.max_support_points = 10,
+	.set_hid_to_std     = false
+};
+
+static const struct edt_i2c_chip_data edt_ft5x46_data = {
+	.max_support_points = 10,
+	.set_hid_to_std     = true
 };
 
 static const struct edt_i2c_chip_data edt_ft6236_data = {
 	.max_support_points = 2,
+	.set_hid_to_std     = false
 };
 
 static const struct i2c_device_id edt_ft5x06_ts_id[] = {
@@ -1492,6 +1689,7 @@ static const struct of_device_id edt_ft5x06_of_match[] = {
 	{ .compatible = "edt,edt-ft5306", .data = &edt_ft5x06_data },
 	{ .compatible = "edt,edt-ft5406", .data = &edt_ft5x06_data },
 	{ .compatible = "edt,edt-ft5506", .data = &edt_ft5506_data },
+	{ .compatible = "edt,edt-ft5x46", .data = &edt_ft5x46_data },
 	{ .compatible = "evervision,ev-ft5726", .data = &edt_ft5506_data },
 	/* Note focaltech vendor prefix for compatibility with ft6236.c */
 	{ .compatible = "focaltech,ft6236", .data = &edt_ft6236_data },
