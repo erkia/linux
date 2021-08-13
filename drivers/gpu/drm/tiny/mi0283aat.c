@@ -18,6 +18,7 @@
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_ioctl.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_mipi_dbi.h>
 #include <drm/drm_modeset_helper.h>
@@ -128,14 +129,19 @@ out_exit:
 
 static int mi0283aat_config_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 {
-	struct mipi_dbi_dev *dbidev = dev->dev_private;
+	struct mipi_dbi_dev *dbidev = drm_to_mipi_dbi_dev(dev);
 	struct mipi_dbi *dbi = &dbidev->dbi;
 	mi0283aat_config_t *val = data;
+	int idx;
 
 	if (val->lutb < 0) {
 		val->lutb = 0;
 	} else if (val->lutb > 100) {
 		val->lutb = 100;
+	}
+
+	if (!drm_dev_enter(dev, &idx)) {
+		return -EINVAL;
 	}
 
 	mipi_dbi_command(dbi, ST7789V_DGMLUTB,
@@ -148,6 +154,8 @@ static int mi0283aat_config_ioctl(struct drm_device *dev, void *data, struct drm
 		0xC0 * val->lutb / 100, 0xC4 * val->lutb / 100, 0xC8 * val->lutb / 100, 0xCC * val->lutb / 100, 0xD0 * val->lutb / 100, 0xD4 * val->lutb / 100, 0xD8 * val->lutb / 100, 0xDC * val->lutb / 100,
 		0xE0 * val->lutb / 100, 0xE4 * val->lutb / 100, 0xE8 * val->lutb / 100, 0xEC * val->lutb / 100, 0xF0 * val->lutb / 100, 0xF4 * val->lutb / 100, 0xF8 * val->lutb / 100, 0xFC * val->lutb / 100,
 	);
+
+	drm_dev_exit(idx);
 
 	return 0;
 }
@@ -164,7 +172,7 @@ static const struct drm_display_mode mi0283aat_mode = {
 };
 
 static const struct drm_ioctl_desc mi0283aat_ioctls[] = {
-	DRM_IOCTL_DEF_DRV(MI0283AAT_CONFIG, mi0283aat_config_ioctl, DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(MI0283AAT_CONFIG, mi0283aat_config_ioctl, DRM_AUTH | DRM_RENDER_ALLOW),
 };
 
 DEFINE_DRM_GEM_CMA_FOPS(mi0283aat_fops);
@@ -178,7 +186,7 @@ static struct drm_driver mi0283aat_driver = {
 	.num_ioctls		= sizeof(mi0283aat_ioctls) / sizeof(mi0283aat_ioctls[0]),
 	.name			= "mi0283aat",
 	.desc			= "Multi-Inno MI0283AAT",
-	.date			= "20160614",
+	.date			= "20210812",
 	.major			= 1,
 	.minor			= 0,
 };
@@ -205,8 +213,7 @@ static int mi0283aat_probe(struct spi_device *spi)
 	u32 rotation = 0;
 	int ret;
 
-	dbidev = devm_drm_dev_alloc(dev, &mi0283aat_driver,
-				    struct mipi_dbi_dev, drm);
+	dbidev = devm_drm_dev_alloc(dev, &mi0283aat_driver, struct mipi_dbi_dev, drm);
 	if (IS_ERR(dbidev))
 		return PTR_ERR(dbidev);
 
