@@ -23,7 +23,8 @@ fb-y				  += fbcon_rotate.o fbcon_cw.o fbcon_ud.o \
 endif
 endif
 
-fb-$(CONFIG_LOGO)		  += fb_logo.o
+fb-$(CONFIG_LOGO)              += fb_logo.o
+obj-$(CONFIG_FB_BOOT_LOGO)     += fb_boot_logo.o
 
 obj-$(CONFIG_FB_CFB_FILLRECT)  += cfbfillrect.o
 obj-$(CONFIG_FB_CFB_COPYAREA)  += cfbcopyarea.o
