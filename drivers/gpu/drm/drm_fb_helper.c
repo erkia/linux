@@ -1981,6 +1981,14 @@ __drm_fb_helper_initial_config_and_unlock(struct drm_fb_helper *fb_helper,
 	list_add(&fb_helper->kernel_fb_list, &kernel_fb_helper_list);
 	mutex_unlock(&kernel_fb_helper_lock);
 
+#if !defined(CONFIG_FRAMEBUFFER_CONSOLE) && defined(CONFIG_LOGO)
+	if (fb_prepare_logo(info, FB_ROTATE_UR)) {
+		fb_set_cmap(&info->cmap, info);
+		fb_show_logo(info, FB_ROTATE_UR);
+		drm_fb_helper_restore_fbdev_mode_unlocked (fb_helper);
+	}
+#endif
+
 	return 0;
 }
 
