@@ -205,3 +205,9 @@ config FB_TILEBLITTING
 
 	  This is particularly important to one driver, matroxfb.  If
 	  unsure, say N.
+
+config FB_BOOT_LOGO
+	tristate "Show logo on boot"
+	depends on FB && OF && LOGO
+	help
+	  Prefill framebuffer with logo on boot
