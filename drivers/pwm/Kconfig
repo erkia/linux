@@ -47,6 +47,12 @@ config PWM_PROVIDE_GPIO
 	  PWM chip provide a GPIO chip and so be easily plugged into consumers
 	  that know how to handle GPIOs but not PWMs.
 
+config PWM_EFFECTS
+	bool "PWM effects"
+	depends on OF
+	help
+	  This option enables PWM effects module
+
 config PWM_AB8500
 	tristate "AB8500 PWM support"
 	depends on AB8500_CORE && ARCH_U8500
