@@ -293,6 +293,10 @@ static int sun4i_i2s_get_bclk_div(struct sun4i_i2s *i2s,
 	int div = parent_rate / sampling_rate / word_size / channels;
 	int i;
 
+	if (div == 15) {
+		div = 16;
+	}
+
 	for (i = 0; i < i2s->variant->num_bclk_dividers; i++) {
 		const struct sun4i_i2s_clk_div *bdiv = &dividers[i];
 
