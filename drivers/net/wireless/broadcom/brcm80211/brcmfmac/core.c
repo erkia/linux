@@ -581,8 +581,16 @@ static void brcmf_ethtool_get_drvinfo(struct net_device *ndev,
 		sizeof(info->bus_info));
 }
 
+static int brcmf_ethtool_get_ts_info(struct net_device *dev, struct kernel_ethtool_ts_info *info)
+{
+	info->so_timestamping = SOF_TIMESTAMPING_TX_SOFTWARE;
+
+	return 0;
+}
+
 static const struct ethtool_ops brcmf_ethtool_ops = {
 	.get_drvinfo = brcmf_ethtool_get_drvinfo,
+	.get_ts_info = brcmf_ethtool_get_ts_info,
 };
 
 static int brcmf_netdev_stop(struct net_device *ndev)
